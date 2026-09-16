@@ -1,0 +1,43 @@
+
+{
+    "Propietarios": [
+        {
+            "DNI": "11111111",
+            "Nombre": "Carlos",
+            "Apellido": "Gomez",
+            "Teléfono": "3412345678"
+        },
+        {
+            "DNI": "22222222",
+            "Nombre": "Maria",
+            "Apellido": "Perez",
+            "Teléfono": "3419876543"
+        },
+        {
+            "DNI": "33333333",
+            "Nombre": "Jorge",
+            "Apellido": "Rodriguez",
+            "Teléfono": "1145678901"
+        }
+    ],
+    "Vehículos": [
+        {
+            "Patente": "AB123CD",
+            "Marca": "Ford",
+            "Modelo": "Focus",
+            "DNI_Propietario": "11111111"
+        },
+        {
+            "Patente": "YZ987XX",
+            "Marca": "Toyota",
+            "Modelo": "Corolla",
+            "DNI_Propietario": "22222222"
+        },
+        {
+            "Patente": "AA000BB",
+            "Marca": "Volkswagen",
+            "Modelo": "Gol Trend",
+            "DNI_Propietario": "11111111"
+        }
+    ]
+}
