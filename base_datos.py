@@ -1,112 +1,131 @@
-# Archivo: base_datos.py
-
-import json
-import os
+import sqlite3
 
 class ControladorBD:
-    def __init__(self):
-        self.datos = {}
-        self.cargar_datos_demo()
+    def __init__(self, db_name="sistema_crud.db"):
+        self.db_name = db_name
+        self.datos = {"Propietarios": [], "Vehículos": []}
+        
+        # Al iniciar, creamos las tablas si no existen y traemos los datos
+        self._crear_tablas_iniciales()
+        self._sincronizar_memoria()
 
-    def cargar_datos_demo(self):
+    def _conectar(self):
+        """Abre y devuelve una conexión a la base de datos SQLite."""
+        return sqlite3.connect(self.db_name)
+
+    def _crear_tablas_iniciales(self):
+        """Genera el esquema relacional en el archivo .db"""
+        with self._conectar() as conn:
+            cursor = conn.cursor()
+            
+            # Tabla Propietarios (DNI como Clave Primaria)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS Propietarios (
+                    DNI TEXT PRIMARY KEY,
+                    Nombre TEXT,
+                    Apellido TEXT,
+                    Teléfono TEXT
+                )
+            """)
+            
+            # Tabla Vehículos (Patente como Clave Primaria y DNI_Propietario como Foránea)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS Vehículos (
+                    Patente TEXT PRIMARY KEY,
+                    Marca TEXT,
+                    Modelo TEXT,
+                    Año TEXT,
+                    DNI_Propietario TEXT,
+                    FOREIGN KEY(DNI_Propietario) REFERENCES Propietarios(DNI)
+                )
+            """)
+            conn.commit()
+
+    def _sincronizar_memoria(self):
         """
-        Carga datos iniciales desde un archivo JSON para demostraciones.
+        Lee los datos de SQLite y actualiza el diccionario self.datos.
+        Esto permite que interfaz.py siga funcionando exactamente igual sin enterarse 
+        de que ahora usamos SQL por detrás.
         """
-        if os.path.exists("datos_prueba.json"):
-            try:
-                with open("datos_prueba.json", "r", encoding="utf-8") as archivo:
-                    self.datos = json.load(archivo)
-            except Exception as e:
-                print(f"No se pudo cargar el archivo de prueba: {e}")
+        self.datos = {"Propietarios": [], "Vehículos": []}
+        
+        with self._conectar() as conn:
+            conn.row_factory = sqlite3.Row  # Nos permite acceder a las columnas por nombre
+            cursor = conn.cursor()
+            
+            # Traemos todos los propietarios
+            cursor.execute("SELECT DNI, Nombre, Apellido, Teléfono FROM Propietarios")
+            for fila in cursor.fetchall():
+                self.datos["Propietarios"].append(dict(fila))
+                
+            # Traemos todos los vehículos
+            cursor.execute("SELECT Patente, Marca, Modelo, Año, DNI_Propietario FROM Vehículos")
+            for fila in cursor.fetchall():
+                self.datos["Vehículos"].append(dict(fila))
 
     def crear_tabla(self, entidad):
-        # ... (Acá sigue tu código normal)
-        try:
-            if entidad not in self.datos:
-                self.datos[entidad] = []
-        except Exception as e:
-            raise RuntimeError(f"Error al inicializar la tabla {entidad}: {e}")
-
-    def existe_registro(self, entidad, campo_clave, valor):
         """
-        Verifica si ya existe un registro con el mismo valor en un campo clave 
-        (Ej: Verificar si ya existe un DNI o una Patente).
+        Mantenemos el método para compatibilidad con la inicialización de interfaz.py.
+        La creación real de tablas ahora se hace en _crear_tablas_iniciales().
         """
-        try:
-            registros = self.datos.get(entidad, [])
-            for r in registros:
-                if r.get(campo_clave) == valor:
-                    return True
-            return False
-        except Exception:
-            return False
+        pass
 
     def insertar(self, entidad, registro):
-        try:
-            if entidad not in self.datos:
-                self.crear_tabla(entidad)
-            self.datos[entidad].append(registro)
-        except Exception as e:
-            raise RuntimeError(f"No se pudo insertar el registro: {e}")
+        with self._conectar() as conn:
+            cursor = conn.cursor()
+            
+            if entidad == "Propietarios":
+                cursor.execute("""
+                    INSERT INTO Propietarios (DNI, Nombre, Apellido, Teléfono)
+                    VALUES (?, ?, ?, ?)
+                """, (registro["DNI"], registro["Nombre"], registro["Apellido"], registro["Teléfono"]))
+                
+            elif entidad == "Vehículos":
+                cursor.execute("""
+                    INSERT INTO Vehículos (Patente, Marca, Modelo, Año, DNI_Propietario)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (registro["Patente"], registro["Marca"], registro["Modelo"], registro["Año"], registro["DNI_Propietario"]))
+            
+            conn.commit()
+            
+        # Sincronizamos la vista en memoria para actualizar la tabla (Treeview)
+        self._sincronizar_memoria()
 
     def eliminar(self, entidad, indice):
-        try:
-            if entidad in self.datos and 0 <= indice < len(self.datos[entidad]):
-                self.datos[entidad].pop(indice)
-            else:
-                raise IndexError("El índice seleccionado no existe en la base de datos.")
-        except Exception as e:
-            raise RuntimeError(f"Error al intentar eliminar el registro: {e}")
+        # Encontramos cuál es la clave principal (DNI o Patente) usando el índice visual de la tabla
+        registro_a_eliminar = self.datos[entidad][indice]
+        
+        with self._conectar() as conn:
+            cursor = conn.cursor()
+            
+            if entidad == "Propietarios":
+                dni = registro_a_eliminar["DNI"]
+                # Borrado en cascada: Si borramos al dueño, borramos sus autos primero
+                cursor.execute("DELETE FROM Vehículos WHERE DNI_Propietario = ?", (dni,))
+                cursor.execute("DELETE FROM Propietarios WHERE DNI = ?", (dni,))
+                
+            elif entidad == "Vehículos":
+                patente = registro_a_eliminar["Patente"]
+                cursor.execute("DELETE FROM Vehículos WHERE Patente = ?", (patente,))
+                
+            conn.commit()
+            
+        self._sincronizar_memoria()
+
+    def existe_registro(self, entidad, campo, valor):
+        with self._conectar() as conn:
+            cursor = conn.cursor()
+            # Inyección segura porque 'entidad' y 'campo' están controlados por nuestro propio código
+            query = f"SELECT COUNT(*) FROM {entidad} WHERE {campo} = ?"
+            cursor.execute(query, (valor,))
+            resultado = cursor.fetchone()[0]
+            
+            return resultado > 0
 
     def cambiar_duenio_vehiculo(self, patente, nuevo_dni):
-        """
-        Cambia el DNI_Propietario de un vehículo buscando por su patente.
-        """
-        try:
-            vehiculos = self.datos.get("Vehículos", [])
-            propietarios = self.datos.get("Propietarios", [])
-
-            # Validamos que el nuevo propietario exista
-            existe_propietario = any(p.get("DNI") == nuevo_dni for p in propietarios)
-            if not existe_propietario:
-                raise ValueError(f"El DNI '{nuevo_dni}' no pertenece a ningún propietario registrado.")
-
-            # Buscamos y actualizamos el vehículo
-            encontrado = False
-            for v in vehiculos:
-                if v.get("Patente") == patente:
-                    v["DNI_Propietario"] = nuevo_dni
-                    encontrado = True
-                    break
+        with self._conectar() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE Vehículos SET DNI_Propietario = ? WHERE Patente = ?", (nuevo_dni, patente))
+            conn.commit()
             
-            if not encontrado:
-                raise ValueError(f"No se encontró ningún vehículo con la patente '{patente}'.")
-            
-            return True
-        except Exception as e:
-            raise RuntimeError(f"{e}")
-
-    def obtener_join_vehiculos_propietarios(self):
-        try:
-            resultado = []
-            vehiculos = self.datos.get("Vehículos", [])
-            propietarios = self.datos.get("Propietarios", [])
-
-            mapa_propietarios = {p.get("DNI"): p for p in propietarios}
-
-            for v in vehiculos:
-                dni_dueño = v.get("DNI_Propietario")
-                dueño = mapa_propietarios.get(dni_dueño)
-                
-                fila = {
-                    "Patente": v.get("Patente", "N/D"),
-                    "Marca": v.get("Marca", "N/D"),
-                    "Modelo": v.get("Modelo", "N/D"),
-                    "Dueño": f"{dueño.get('Nombre', 'Desconocido')} {dueño.get('Apellido', '')}" if dueño else "Sin asignar"
-                }
-                resultado.append(fila)
-                
-            return resultado
-        except Exception as e:
-            print(f"Error en el reporte de Join: {e}")
-            return []
+        self._sincronizar_memoria()
